@@ -1,0 +1,357 @@
+\documentclass[lang=cn,11pt,a4paper,cite=authoryear]{elegantpaper}
+\usepackage{ulem}
+
+\title{实验1：了解你的编译器}
+\author{张倬玮 \\ 1811459}
+
+\date{\zhtoday}
+
+% 本文档命令
+\usepackage{array}
+\newcommand{\ccr}[1]{\makecell{{\color{#1}\rule{1cm}{1cm}}}}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+以GCC编译器为研究对象，探究语言处理系统的完整工作过程，并以一段样例程序为例，重点探究了预处理器、编译器、汇编器、链接器等四部分在编译过程中的具体工作，对编译器有了一个初步的了解和认识。
+\keywords{编译系统原理，编译器，GCC}
+\end{abstract}
+
+% 引言
+\section{部分实验代码}
+
+\subsection{C语言样例程序main.c}
+
+\begin{lstlisting}
+#include <stdio.h>
+
+int a = 0;
+int b = 0;
+
+int max(int a, int b) {
+    if(a >= b) {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+int main() {
+    scanf("%d %d", &a, &b);
+    printf("max is: %d/n", max(a, b));
+    return 0;
+}
+\end{lstlisting}
+
+\subsection{Makefile文件}
+\begin{lstlisting}
+.PHONY: pre, ast, ir, asm, obj, exe, antiobj, antiexe
+
+pre:
+	gcc main.c -E -o main.i
+
+# 生成`main.c.003t.original` 
+ast:
+	gcc -fdump-tree-original-raw main.c
+
+# 会生成多个阶段的文件 (.dot)，可以被 graphviz 可视化，可以直接使用 vscode 插件 
+# (Graphviz (dot) language support for Visual Studio Code)。
+# 此时的可读性还很强。`main.c.011t.cfg.dot` 
+cfg:
+	gcc -O0 -fdump-tree-all-graph main.c
+
+# 此时可读性不好，简要了解各阶段更迭过程即可。 
+ir:
+	gcc -O0 -fdump-rtl-all-graph main.c
+
+asm:
+	gcc -O0 -o main.S -S -masm=att main.i
+
+obj:
+	gcc -O0 -c -o main.o main.S
+
+antiobj:
+	objdump -d main.o > main-anti-obj.S 
+	nm main.o > main-nm-obj.txt
+
+exe:
+	gcc -O0 -o main main.o
+
+antiexe:
+	objdump -d main > main-anti-exe.S 
+	nm main > main-nm-exe.txt
+
+clean:
+	rm *.c.*
+
+clean-all:
+	rm *.c.* *.o *.S *.dot *.out *.txt main
+\end{lstlisting}
+
+% 预处理器
+\section{预处理器}
+预处理器是在真正的编译开始之前由编译器调用的独立程序。预处理器可以删除注释、包含其他文件以及执行宏替代。预处理器不是编译器的组成部分，但是它是编译过程中一个单独的步骤。
+
+C 预处理器是一个文本替换工具，它在源代码进行编译之前，对其进行一些文本性质的操作。主要任务包括：删除注释、插入被 #include 指令包含的文件的内容、定义和替换由 #define 指令定义的符号、以及确定代码的部分内容是否应该根据一些条件编译指令进行编译等。
+
+具体到本次试验中的main.c文件（见引言，下同），通过命令 gcc main.c -E -o main.i，即可得到其预处理后文件。 
+
+可以看出，main.c中#include<stdio.h>（包含头文件）被预处理器展开成为700余行代码。下面通过部分截图举例说明：
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{yuchuli1.png}
+  \caption{内置数据类型的定义}
+\end{figure}
+
+这段代码定义了一些特殊的数据类型。如typedef signed int int32,即将有符号整型
+（32位整数）定别名为int32.
+
+\clearpage
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{yuchuli2.png}
+  \caption{scanf等函数的定义}
+\end{figure}
+
+extern的作用是声明函数或全局变量的作用范围的关键字，其声明的函数和变量可以在本模块活其他模块中使用，它是一个声明而不是定义。
+
+也就是说，B模块(编译单元)要是引用模块(编译单元)A中定义的全局变量或函数时，它只要包含A模块的头文件即可,在编译阶段，模块B虽然找不到该函数或变量，但它不会报错，它会在连接时从模块A生成的目标代码中找到此函数。
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=3in]{yuchuli3.png}
+  \caption{main函数}
+\end{figure}
+
+和原来一样，没有什么变化。
+
+\clearpage
+
+% 编译器
+\section{编译器}
+
+\subsection{AST语法树}
+
+GCC编译器的前端将高级语言源码经过词法分析、语法分析生成一棵抽象语法树。GCC编译器的抽象语法树是源程序的一种中间表示形式，比较直观的表示出源程序的语法结构，并含有源程序结构显示所需要的全部静态信息。
+
+GCC格式的AST文件是GCC编译源程序时产生的，以文本方式记录源程序抽象语法树的文件。
+
+执行makefile中的make ast，我们得到了一棵\sout{非常晦涩难懂的}用文字标识的语法树。我尝试把它转化为dot文件，然后使用graphviz将其可视化，但是由于某些奇怪的bug没有成功。
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{sbcs1.png}
+  \caption{失败的尝试1}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{sbcs2.png}
+  \caption{失败的尝试2}
+\end{figure}
+
+因为以上原因，我举例分析一下AST语法树的部分内容。
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=3in]{ast.png}
+  \caption{部分AST语法树}
+\end{figure}
+
+这一段描述的是main.c中的max函数。parmdecl表示参数声明（parameter declare）。@10和@11两部分分别声明了参数a和b。我们可以分别在@18和@20中找到其参数名，在@9中找到其类型（integertype）等。其子节点为@19即函数声明，其中又包含了name,type,size等属性。这样一直传递下去，就得到了一棵描述max函数的AST语法树。
+
+\subsection{STL}
+
+使用Makefile中的make cfg，并使用graphviz将生成的dot文件转化为png，我们可以看到各阶段中CFG（控制流图）的变化。（由于排版问题，图片显示在全文最后，非常抱歉）
+
+可以看到，这两张图片没有任何区别。\sout{这就是O0优化嘛真是有够好笑的呢}
+
+于是我尝试了一下O1和O2优化，结果如图（同上）
+
+可以看到，O1和O2两种优化之间几乎没有区别（只是几个寄存器名变了一下），但是相比于O0，在max函数上有了不小的优化，由两个分支变成了一个分支。
+
+另外，出现了神秘数字1073741824为2的30次方，具体意义有待探究。
+
+\subsection{生成汇编代码}
+
+使用Makefile中的make asm，我们可以把以上生成的，优化之后的中间代码转化成汇编代码。
+
+\begin{lstlisting}
+	.file	"main.c"
+	.text
+	.globl	a
+	.bss
+	.align 4
+	.type	a, @object
+	.size	a, 4
+a:
+	.zero	4
+	.globl	b
+	.align 4
+	.type	b, @object
+	.size	b, 4
+b:
+	.zero	4
+	.text
+	.globl	max
+	.type	max, @function
+max:
+.LFB0:
+	.cfi_startproc
+	endbr64
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset 6, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register 6
+	movl	%edi, -4(%rbp)
+	movl	%esi, -8(%rbp)
+	movl	-4(%rbp), %eax
+	cmpl	-8(%rbp), %eax
+	jl	.L2
+	movl	-4(%rbp), %eax
+	jmp	.L3
+.L2:
+	movl	-8(%rbp), %eax
+.L3:
+	popq	%rbp
+	.cfi_def_cfa 7, 8
+	ret
+	.cfi_endproc
+.LFE0:
+	.size	max, .-max
+	.section	.rodata
+.LC0:
+	.string	"%d %d"
+.LC1:
+	.string	"max is: %d/n"
+	.text
+	.globl	main
+	.type	main, @function
+main:
+.LFB1:
+	.cfi_startproc
+	endbr64
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset 6, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register 6
+	leaq	b(%rip), %rdx
+	leaq	a(%rip), %rsi
+	leaq	.LC0(%rip), %rdi
+	movl	$0, %eax
+	call	__isoc99_scanf@PLT
+	movl	b(%rip), %edx
+	movl	a(%rip), %eax
+	movl	%edx, %esi
+	movl	%eax, %edi
+	call	max
+	movl	%eax, %esi
+	leaq	.LC1(%rip), %rdi
+	movl	$0, %eax
+	call	printf@PLT
+	movl	$0, %eax
+	popq	%rbp
+	.cfi_def_cfa 7, 8
+	ret
+	.cfi_endproc
+.LFE1:
+	.size	main, .-main
+	.ident	"GCC: (Ubuntu 9.3.0-10ubuntu2) 9.3.0"
+	.section	.note.GNU-stack,"",@progbits
+	.section	.note.gnu.property,"a"
+	.align 8
+	.long	 1f - 0f
+	.long	 4f - 1f
+	.long	 5
+0:
+	.string	 "GNU"
+1:
+	.align 8
+	.long	 0xc0000002
+	.long	 3f - 2f
+2:
+	.long	 0x3
+3:
+	.align 8
+4:
+\end{lstlisting}
+
+从以上代码中我们可以看出来计算机执行main.c程序的具体步骤。程序开头先定义了a，b两个全局变量，描述了其globl（是否为全局变量）以及size等属性。然后定义了max函数，由cmpl -8(\%rbp),\%eax一句的结果决定跳转至L2或L3分支。main函数中则调用了max函数，以及printf和scanf用来做输入输出，最终返回endproc。（后边还可以看见GCC和Ubuntu的版本号）
+
+%汇编器
+\section{汇编器}
+
+汇编器的作用是建造目标代码，由解译组语指令集的助记符到操作码，并解析符号名称成为存储器地址以及其它的实体。
+
+使用符号参考是汇编器的一个重要特征，它可以节省修改程序后人工转址的乏味耗时计算。基本就是把机器码变成一些字母而已，编译的时候再把输入的指令字母替换成为晦涩难懂的机器码。
+
+使用Makefile中的make obj生成二进制机器码，再使用make antiobj将其转回汇编码，我们可以得到二进制机器码与汇编码对照的一份代码。
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{hbq.png}
+  \caption{antiobj}
+\end{figure}
+
+可以看到，与上一节得到的代码区别不是很大。还是以max函数为例，将两个寄存器中的数据压栈并比较，前者小则跳转至1b，否则跳转至1e，两者均是将正确结果放入有效地址寄存器EA。然后返回。
+
+\section{链接器}
+
+链接器将一个或多个由编译器或汇编器生成的目标文件外加库，链接为一个可执行文件。在Unix-like系统上常用的链接器是GNUld。目标文件是包括机器码和链接器可用信息的程序模块。
+简单的讲，链接器的工作就是解析未定义的符号引用，将目标文件中的占位符替换为符号的地址。链接器还要完成程序中各目标文件的地址空间的组织，这可能涉及重定位工作。
+
+使用Makefile中的make exe生成可执行文件，再使用make antiobj将其转回汇编码，我们可以得到可执行文件码与汇编码对照的一份代码。
+
+\clearpage
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{ljq.png}
+  \caption{antiexe}
+\end{figure}
+
+编译器生成的的内存地址其实只是相对地址，因为在生成一个目标文件时编译器并不知道这个目标文件要和哪些目标文件进行链接生成最后的可执行文件，而链接器是知道要链接哪些目标文件的。因此编译器仅仅生成一个相对地址。
+
+可执行文件中代码以及数据的运行时内存地址是链接器指定的，也就是max的内存地其是链接器指定的。确定程序运行时地址的过程就是重定位。
+
+
+\section{参考文献}
+https://www.runoob.com/cprogramming/c-preprocessors.html
+https://blog.csdn.net/huangpb123/article/details/84799198
+https://blog.csdn.net/u012491514/article/details/25000519
+https://zh.wikipedia.org/wiki/%E9%93%BE%E6%8E%A5%E5%99%A8
+https://zh.wikipedia.org/wiki/%E7%B7%A8%E8%AD%AF%E5%99%A8
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{opq.png}
+  \caption{优化前}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{oph.png}
+  \caption{优化后}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{O1.png}
+  \caption{O1优化}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{O2.png}
+  \caption{O2优化}
+\end{figure}
+
+
+
+\end{document}
